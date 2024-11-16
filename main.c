@@ -1,253 +1,264 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdbool.h>
 #include <time.h>
+#include <stdbool.h>
+#include <unistd.h> // Necessário para a função sleep()
 
-// Role dos define
-#define TEMPSIMAM 9000              // Café da manhã
-#define TEMPSIMPM 12600             // Almoço
-#define TEMPJANTAR 9000             // Jantar
-#define BANSERMIN 3                 // Mínimo de serventes por bancada
-#define BANSERMAX 6                 // Máximo de serventes por bancada
-#define QTDBANMIN 1                 // Mínimo de bancadas
-#define QTDBANMAX 3                 // Máximo de bancadas
-#define QTDSERMIN 3                 // Mínimo de serventes ativos
-#define QTSERMAX 6                  // Máximo de serventes ativos
-#define TEMPSERMAX 3600             // Máximo de trabalho sem intervalo (1 hora)
-#define TEMPSERINT 1800             // Intervalo obrigatório de descanso (30 minutos)
-#define NING 6                      // Ingredientes do cardápio
-#define CAPING 1000                 // Capacidade de cada vasilha em gramas
-#define QTDMINING 50                // Mínimo de gramas por ingrediente
-#define QTDMAXING 150               // Máximo de gramas por ingrediente
-#define NFILAS 3                    // Número de filas de atendimento
-#define TEMPUSUMIN 3                // Tempo mínimo de atendimento
-#define TEMPUSUMAX 6                // Tempo máximo de atendimento
-#define TEMPO_EXTRA_VEGETARIANO 5   // Tempo adicional para usuários vegetarianos
+#define TEMPSIMAM 1800 // 06h30 - 09h00 (1800 segundos)
+#define TEMPSIMPM 12600 // 11h00 - 14h30 (12600 segundos)
+#define TEMPSIMJANTAR 9000 // 17h00 - 19h30 (9000 segundos)
 
-typedef struct Usuario {
+#define TEMPUSUMIN 3 // Tempo mínimo de atendimento em segundos
+#define TEMPUSUMAX 6 // Tempo máximo de atendimento em segundos
+
+#define NFILAS 5 // Número de filas
+
+#define TEMPOESPECIALVEGETARIANO 2 // Tempo adicional para vegetarianos
+
+#define QTDBANMIN 1 // Mínimo de bancadas
+#define QTDBANMAX 5 // Máximo de bancadas
+#define BANSERMIN 3 // Mínimo de serventes por bancada
+#define BANSERMAX 6 // Máximo de serventes por bancada
+
+#define TEMPSERMAX 3600 // Máximo de trabalho contínuo em segundos (1 hora)
+#define TEMPSERINT 1800 // Intervalo mínimo em segundos (30 minutos)
+
+#define NING 6 // Número de ingredientes
+#define CAPING1 5000 // Capacidade da vasilha em gramas
+
+#define NPROBING1 70 // Probabilidade de aceitação do ingrediente 1 (%)
+#define QTDMINING1 100 // Quantidade mínima servida do ingrediente 1 em gramas
+#define QTDMAXING1 300 // Quantidade máxima servida do ingrediente 1 em gramas
+
+// Definindo a resolução do simulador
+#define RESOLUCAOSEGUNDOS 1 // Resolução em segundos
+
+typedef struct {
     int id;
     bool vegetariano;
-    int tempoEspera;
-    struct Usuario* prox;
+    int filaEscolhida; // Fila escolhida pelo usuário
 } Usuario;
 
-typedef struct Fila {
-    Usuario* inicio;
-    Usuario* fim;
-    int tamanho;
-} Fila;
-
-typedef struct Servente {
+typedef struct {
     int id;
-    bool atendeVegano;
-    bool ocupado;
     int usuariosAtendidos;
-    int tempoTrabalhado;
-    int tempoDesdeDescanso;
+    float tempoMedioAtendimento;
+    float tempoTotalAtendimento;
+    int tempoTrabalho; // Tempo total trabalhado pelo servente
+    bool ativo;       // Indica se o servente está ativo ou não
 } Servente;
 
-typedef struct Ingrediente {
+typedef struct {
     int id;
-    int quantidade; 
-} Ingrediente;
+    int serventesAtendidos;
+    float tempoMedioAtendimento;
+    float tempoTotalAtendimento;
+} Bancada;
 
-// Inicia e faz Manutenção das Filas
+Bancada bancadas[QTDBANMAX];
+Servente serventes[BANSERMAX]; // Total de serventes é definido aqui
+int totalUsuariosAtendidos = 0;
+float totalTempoAtendimento = 0;
+float totalTempoEspera = 0;
+int totalConsumido[NING] = {0}; // Total consumido por cada ingrediente
 
-void inicializarFila(Fila* fila) {
-    fila->inicio = NULL;
-    fila->fim = NULL;
-    fila->tamanho = 0;
-}
-
-bool filaVazia(Fila* fila) {
-    return fila->tamanho == 0;
-}
-
-// Usuário entra na fila com menos pessoas
-void enfileirar(Fila* filas, int numFilas, int id, bool vegetariano) {
-    int menorFila = 0;
-    for (int i = 1; i < numFilas; i++) {
-        if (filas[i].tamanho < filas[menorFila].tamanho) {
-            menorFila = i;
-        }
-    }
-    Usuario* novo = (Usuario*)malloc(sizeof(Usuario));
-    novo->id = id;
-    novo->vegetariano = vegetariano;
-    novo->tempoEspera = 0;
-    novo->prox = NULL;
-
-    if (filaVazia(&filas[menorFila])) {
-        filas[menorFila].inicio = novo;
-    } else {
-        filas[menorFila].fim->prox = novo;
-    }
-    filas[menorFila].fim = novo;
-    filas[menorFila].tamanho++;
-    printf("Usuário %d entrou na fila %d. Vegetariano: %s\n", id, menorFila + 1, vegetariano ? "Sim" : "Não");
-}
-
-Usuario* desenfileirar(Fila* fila) {
-    if (filaVazia(fila)) return NULL;
-    Usuario* removido = fila->inicio;
-    fila->inicio = removido->prox;
-    if (fila->inicio == NULL) fila->fim = NULL;
-    fila->tamanho--;
-    return removido;
-}
-
-// Começa de Serventes e Ingredientes
-
-void inicializarServentes(Servente* serventes, int qtd) {
-    for (int i = 0; i < qtd; i++) {
-        serventes[i].id = i + 1;
-        serventes[i].atendeVegano = (i == 0 || i == 3);  // Serventes 1 e 4 são vegetarianos
-        serventes[i].ocupado = false;
-        serventes[i].usuariosAtendidos = 0;
-        serventes[i].tempoTrabalhado = 0;
-        serventes[i].tempoDesdeDescanso = 0;
-    }
-}
-
-void inicializarIngredientes(Ingrediente* ingredientes) {
-    for (int i = 0; i < NING; i++) {
-        ingredientes[i].id = i + 1;
-        ingredientes[i].quantidade = CAPING;
-    }
-}
-
-// Função para Buscar Servente Disponível
-Servente* buscarServenteDisponivel(Servente* serventes, int qtdServentes, Usuario* usuario) {
-    if (usuario->vegetariano) {
-        // Busca entre os serventes vegetarianos (serventes 1 e 4)
-        for (int i = 0; i < qtdServentes; i++) {
-            if ((serventes[i].id == 1 || serventes[i].id == 4) && !serventes[i].ocupado) {
-                return &serventes[i];
-            }
-        }
-        return NULL;  // Serventes vegetarianos ocupados, fila será pausada
-    } else {
-        // Busca por qualquer servente comum para não vegetarianos
-        for (int i = 0; i < qtdServentes; i++) {
-            if (!serventes[i].ocupado) {
-                return &serventes[i];
-            }
-        }
-        return NULL;  // Todos os serventes comuns ocupados
-    }
-}
-
-// Atendimento e Controle de Ingredientes
-
-void atenderUsuario(Usuario* usuario, Servente* servente, Ingrediente* ingredientes) {
-    int tempoAtendimento = TEMPUSUMIN + rand() % (TEMPUSUMAX - TEMPUSUMIN + 1);
-    if (usuario->vegetariano) {
-        tempoAtendimento += TEMPO_EXTRA_VEGETARIANO;  // Tempo extra para vegetarianos
-    }
-
-    printf("Servente %d está atendendo o usuário %d por %d segundos.\n", 
-           servente->id, usuario->id, tempoAtendimento);
-
-    for (int i = 0; i < NING; i++) {
-        if (rand() % 2 && ingredientes[i].quantidade >= QTDMINING) {
-            ingredientes[i].quantidade -= QTDMINING;
-        } else if (ingredientes[i].quantidade < QTDMINING) {
-            printf("Ingrediente %d em reposição...\n", ingredientes[i].id);
-            ingredientes[i].quantidade = CAPING;
-        }
-    }
-
-    servente->usuariosAtendidos++;
-    servente->tempoTrabalhado += tempoAtendimento;
-    servente->tempoDesdeDescanso += tempoAtendimento;
-    servente->ocupado = true;
-    free(usuario);
-}
-
-// descanso dos serventes e ativa rodízio
-void verificarDescanso(Servente* serventes, int qtd) {
-    for (int i = 0; i < qtd; i++) {
-        if (serventes[i].tempoDesdeDescanso >= TEMPSERMAX) {
-            printf("Servente %d entrou em descanso obrigatório.\n", serventes[i].id);
-            serventes[i].tempoDesdeDescanso = 0;
-            serventes[i].ocupado = true;
-        } else if (serventes[i].ocupado && serventes[i].tempoDesdeDescanso >= TEMPSERINT) {
-            serventes[i].ocupado = false;
-            printf("Servente %d retornou ao trabalho.\n", serventes[i].id);
-        }
-    }
-}
-
-// Turno e Relatório
-
-void simularTurno(Fila* filas, Servente* serventes, int qtdServentes, Ingrediente* ingredientes, bool jantar) {
-    bool filaProcessada;
-    do {
-        filaProcessada = false;
-        for (int i = 0; i < (jantar ? NFILAS - 1 : NFILAS); i++) {
-            printf("\n*---------------------*\n");
-            printf("Processando Fila %d:\n", i + 1);
-            if (!filaVazia(&filas[i])) {
-                Usuario* usuario = filas[i].inicio;
-                Servente* servente = buscarServenteDisponivel(serventes, qtdServentes, usuario);
-
-                if (servente) {
-                    desenfileirar(&filas[i]);
-                    atenderUsuario(usuario, servente, ingredientes);
-                    filaProcessada = true;
-                } else {
-                    printf("Nenhum servente disponível para o usuário %d. Fila pausada.\n", usuario->id);
-                    break;
-                }
-                verificarDescanso(serventes, qtdServentes);
-            }
-        }
-    } while (filaProcessada);
-}
-
-void gerarRelatorio(Servente* serventes, int qtdServentes, Ingrediente* ingredientes) {
-    printf("\n--- Relatório Final ---\n");
-    for (int i = 0; i < qtdServentes; i++) {
-        printf("Servente %d atendeu %d usuários e trabalhou %d segundos.\n", 
-               serventes[i].id, serventes[i].usuariosAtendidos, serventes[i].tempoTrabalhado);
-    }
-
-    for (int i = 0; i < NING; i++) {
-        printf("Ingrediente %d - Quantidade restante: %d gramas\n", 
-               ingredientes[i].id, ingredientes[i].quantidade);
-    }
-}
+void iniciarSimulador(int numAtendimentos);
+void fecharRU();
+void atenderUsuario(int tempoAtual, int usuarioId);
+int gerarTempoAtendimento();
+void gerarRelatorios();
+int chegadaUsuarios(int tempoAtual);
+bool usuarioVegetariano();
+int calcularTempoDeEspera(int fila);
+void atualizarRelatorios(int ingrediente, int tempoAtendimento, int serventeId, int bancadaId);
+void trocarServente(int *serventeId);
 
 int main() {
-    srand(time(NULL));
+    srand(time(NULL)); // Inicializa a semente para números aleatórios
+    
+    int numAtendimentos;
+    printf("Digite o numero total de atendimentos a serem feitos: ");
+    scanf("%d", &numAtendimentos);
 
-    int numeroUsuarios;
-    printf("Digite o número de usuários para a simulação: ");
-    scanf("%d", &numeroUsuarios);
+    iniciarSimulador(numAtendimentos);
+    return 0;
+}
 
-    // Começa as filas
-    Fila filas[NFILAS];
-    for (int i = 0; i < NFILAS; i++) {
-        inicializarFila(&filas[i]);
+void iniciarSimulador(int numAtendimentos) {
+    int tempoAtual = 0;
+
+    for (int i = 0; i < QTDBANMIN; i++) { 
+        bancadas[i].id = i + 1; 
+        bancadas[i].serventesAtendidos = 0; 
+        bancadas[i].tempoMedioAtendimento = 0; 
+        bancadas[i].tempoTotalAtendimento = 0; 
+        for (int j = 0; j < BANSERMAX; j++) {
+            serventes[j].usuariosAtendidos = -1; 
+            serventes[j].tempoTrabalho = -1;     // Marca como não disponíveis inicialmente
+            serventes[j].ativo = false;          // Inicialmente não ativos
+        }
     }
 
-    // Começa serventes e ingredientes
-    Servente serventes[QTSERMAX];
-    inicializarServentes(serventes, QTDSERMIN);
-    Ingrediente ingredientes[NING];
-    inicializarIngredientes(ingredientes);
-
-    // Enfileira usuários, escolhendo a fila com menos pessoas
-    for (int i = 0; i < numeroUsuarios; i++) {
-        enfileirar(filas, NFILAS, i + 1, rand() % 2);
+    for (int j = 0; j < BANSERMIN; j++) { // Ativa apenas os primeiros três serventes
+        serventes[j].usuariosAtendidos = 0; 
+        serventes[j].tempoMedioAtendimento = 0; 
+        serventes[j].tempoTotalAtendimento = 0; 
+        serventes[j].tempoTrabalho = rand() % TEMPSERMAX; // Tempo inicial trabalhado aleatório
+        serventes[j].ativo = true;   // Marca como ativo
     }
 
-    // Simulação dos turnos com a regra do jantar (uma fila a menos)
-    simularTurno(filas, serventes, QTDSERMIN, ingredientes, false); // Manhã e Almoço
-    simularTurno(filas, serventes, QTDSERMIN, ingredientes, true);  // Jantar
+    for (int atendimentosFeitos = 0; atendimentosFeitos < numAtendimentos; atendimentosFeitos++) {
+        if (tempoAtual < (TEMPSIMAM + TEMPSIMPM + TEMPSIMJANTAR)) {
+            if (tempoAtual % RESOLUCAOSEGUNDOS == 0) {
+                int usuarioId = atendimentosFeitos + 1; // ID do usuário
+                atenderUsuario(tempoAtual, usuarioId);
+            }
+            tempoAtual += RESOLUCAOSEGUNDOS; 
+        } else {
+            break; // Se o horário do RU já passou, encerra o loop
+            
+        }
+        
+        if (tempoAtual % TEMPSERMAX == 0) { 
+            for (int i = BANSERMIN - 1; i < BANSERMAX; i++) {
+                if (serventes[i].ativo) {
+                    printf("Horario: - Servente %d foi para intervalo.\n", i + 1);
+                    serventes[i].ativo = false;   // Marca como não ativo
+                }
+            }
+            
+            for (int i = BANSERMIN - 1; i < BANSERMAX; i++) {
+                if (!serventes[i].ativo) {
+                    printf("Horario: - Servente %d voltou do intervalo.\n", i + 1);
+                    serventes[i].ativo = true;   // Marca como ativo novamente
+                }
+            }
+            
+            printf("Serventes ativos: ");
+            for (int k = BANSERMIN - 1; k < BANSERMAX; k++) {
+                if (serventes[k].ativo) {
+                    printf("%d ", k + 1); // Mostra os números dos serventes ativos
+                }
+            }
+            printf("\n");
+        }
+    }
 
-    // Gera relatório final
-    gerarRelatorio(serventes, QTDSERMIN, ingredientes);
+    fecharRU();
+}
 
-    return 0;
+void fecharRU() {
+    gerarRelatorios();
+}
+
+void atenderUsuario(int tempoAtual, int usuarioId) {
+    Usuario usuario;
+    usuario.id = usuarioId;
+    
+    usuario.vegetariano = usuarioVegetariano();
+    
+    int filaEscolhida = rand() % NFILAS; 
+    usuario.filaEscolhida = filaEscolhida;
+
+    int tempoEspera = calcularTempoDeEspera(filaEscolhida);
+    
+    totalTempoEspera += tempoEspera;
+
+    int tempoAtendimento = gerarTempoAtendimento();
+    
+    if (usuario.vegetariano) {
+        tempoAtendimento += TEMPOESPECIALVEGETARIANO;
+    }
+
+    totalTempoAtendimento += tempoAtendimento;
+
+    static int serventeId = -1; // Servente atual (-1 indica que ainda não foi escolhido)
+    
+    if (serventeId == -1) { 
+        serventeId = rand() % BANSERMIN; // Escolhe o primeiro servente aleatoriamente entre os três ativos
+        printf("Horário: - Servente %d iniciado.\n", serventeId + 1);
+    } else {
+        trocarServente(&serventeId); // Troca para o próximo servente na sequência
+    }
+
+    int bancadaId = rand() % QTDBANMIN;   // Escolhe uma bancada aleatoriamente
+    
+    printf("Ordem do atendimento: %d | Fila: %d | Vegetarian: %s | Atendido por Servente: %d\n", 
+           usuario.id, usuario.filaEscolhida + 1, 
+           usuario.vegetariano ? "Sim" : "Não", 
+           serventeId + 1); 
+
+    atualizarRelatorios(rand() % NING, tempoAtendimento, serventeId, bancadaId); 
+
+    totalUsuariosAtendidos++;
+
+}
+
+int gerarTempoAtendimento() {
+    return rand() % (TEMPUSUMAX - TEMPUSUMIN + 1) + TEMPUSUMIN;
+}
+
+bool usuarioVegetariano() {
+    return rand() % 2 == 0; 
+}
+
+int calcularTempoDeEspera(int fila) {
+    return rand() % (10); 
+}
+
+void atualizarRelatorios(int ingrediente, int tempoAtendimento, int serventeId, int bancadaId) {
+    totalConsumido[ingrediente] += QTDMINING1 + rand() % (QTDMAXING1 - QTDMINING1 + 1);
+
+    serventes[serventeId].usuariosAtendidos++;
+    serventes[serventeId].tempoTotalAtendimento += tempoAtendimento;
+
+    bancadas[bancadaId].serventesAtendidos++;
+    bancadas[bancadaId].tempoTotalAtendimento += tempoAtendimento;
+}
+
+void trocarServente(int *serventeId) {
+   *serventeId = (*serventeId + 1) % BANSERMAX; // Alterna para o próximo servente na sequência
+   printf("Horario: - Servente trocado para o Servente %d.\n", *serventeId + 1);
+   printf("Serventes ativos: ");
+   for (int k = BANSERMIN - 1; k < BANSERMAX; k++) {
+       if (serventes[k].ativo) {
+           printf("%d ", k + 1); // Mostra os números dos serventes ativos
+       }
+   }
+   printf("\n");
+}
+
+void gerarRelatorios() {
+    if (totalUsuariosAtendidos > 0) {
+        printf("\n\n===========================================================>RELATORIO<===========================================================");
+        printf("\n->    Total de usuarios atendidos: %d\n", totalUsuariosAtendidos);
+        printf("->    Tempo medio de atendimento: %.2f segundos\n", totalTempoAtendimento / totalUsuariosAtendidos);
+        printf("->    Tempo medio de espera: %.2f segundos\n", totalTempoEspera / totalUsuariosAtendidos);
+        
+        for (int i = 0; i < NING; i++) {
+            printf("->    Total consumido do ingrediente %d: %d gramas\n", i + 1, totalConsumido[i]);
+        }
+        
+        for (int i = 0; i < BANSERMAX; i++) { // Inclui todos os seis serventes no relatório
+            if (serventes[i].usuariosAtendidos >= 0) { // Verifica se o servente foi utilizado
+                printf("->    Servente %d: | Atendidos: %d | Tempo medio: %.2f segundos\n", 
+                        i + 1, 
+                        serventes[i].usuariosAtendidos, 
+                        (serventes[i].usuariosAtendidos > 0 ? 
+                        serventes[i].tempoTotalAtendimento / serventes[i].usuariosAtendidos : 0));
+            }
+        }
+
+        for (int i = 0; i < QTDBANMIN; i++) {
+            if (bancadas[i].serventesAtendidos > 0) {
+               printf("->    Bancada %d: | Atendidos: %d | Tempo medio: %.2f segundos\n", 
+                       bancadas[i].id,
+                       bancadas[i].serventesAtendidos,
+                       bancadas[i].tempoTotalAtendimento / bancadas[i].serventesAtendidos);
+            }
+        }
+        
+    } else {
+        printf("Nenhum usuario foi atendido.\n");
+    }
 }
